@@ -68,11 +68,11 @@ cd ~
 ```
 
 ```
-git clone https://github.com/data927/inventory-segmentor.git
+git clone https://github.com/data927/inventory-samples.git
 ```
 
 ```
-cd inventory-segmentor
+cd inventory-samples
 ```
 
 ```
@@ -218,7 +218,7 @@ Use **this** script for local. Use the other guide for Google.
 ## Quick reference
 
 ```
-cd ~/inventory-segmentor
+cd ~/inventory-samples
 source .venv/bin/activate
 
 python tools/build_quality_sample_local.py --root ~/Downloads/company-dump
@@ -226,7 +226,7 @@ python tools/build_quality_sample_local.py --root ~/Downloads/company-dump
 
 Windows:
 ```
-cd %USERPROFILE%\inventory-segmentor
+cd %USERPROFILE%\inventory-samples
 .venv\Scripts\activate
 
 python tools/build_quality_sample_local.py --root C:\Users\YourName\Downloads\company-dump
