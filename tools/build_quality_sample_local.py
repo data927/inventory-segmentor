@@ -199,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="Files per subfolder per round (default: 1000). Rounds repeat "
                          "until --cap-gb is reached.")
     p.add_argument("--cap-gb", type=float, default=15.0,
-                    help="Overall byte cap in GB (default: 15). Keep doing --limit-per-folder "
+                    help="Overall byte cap in GB (default: 15). Keep doing --limit "
                          "rounds across folders until this is reached.")
     p.add_argument("--folder-name", default="AI Labs Sample Set",
                     help="Destination folder name on the Desktop")
