@@ -3,10 +3,12 @@
 Point ``--root`` at any parent folder. Every immediate subfolder is processed
 (names do not matter).
 
-Per subfolder:
-  - take files in walk order (whatever comes first)
-  - up to ``--limit`` files (default 1000; fewer if the folder has less)
-  - under an equal slice of the overall ``--cap-gb`` budget (default 15GB)
+Selection (overall ``--cap-gb``, default 15GB):
+
+  1. Per subfolder — take up to ``--limit`` files (default 1000; or whatever
+     the folder has if less), walk order, whatever comes first.
+  2. If the total is still under 15GB — keep taking more files from those
+     folders until the cap is reached.
 
 Copies to::
 
@@ -79,15 +81,9 @@ def list_subfolders(root: Path, only: list[str] | None = None) -> list[Path]:
 list_account_dirs = list_subfolders  # back-compat
 
 
-def select_files(folder: Path, *, limit: int, cap_bytes: int) -> list[tuple[Path, int]]:
-    """First files under ``folder`` (walk order) that fit ``cap_bytes``, up to ``limit``.
-
-    Skips a file that does not fit and keeps looking for a smaller one (same idea as
-    Drive greedy fill). Stops once ``limit`` files are kept, or the walk ends.
-    If the folder has fewer files / less data, returns whatever fits.
-    """
-    selected: list[tuple[Path, int]] = []
-    used = 0
+def list_files(folder: Path) -> list[tuple[Path, int]]:
+    """All files under ``folder`` in walk order, with sizes. Skips empty / unreadable."""
+    found: list[tuple[Path, int]] = []
     for dirpath, dirnames, filenames in os.walk(folder):
         dirnames[:] = [
             d for d in dirnames
@@ -107,18 +103,75 @@ def select_files(folder: Path, *, limit: int, cap_bytes: int) -> list[tuple[Path
                 continue
             if size <= 0:
                 continue
-            if used + size > cap_bytes:
-                continue  # skip oversized / doesn't fit; try next
-            selected.append((path, size))
-            used += size
-            if len(selected) >= limit:
+            found.append((path, size))
+    return found
+
+
+def select_files_two_phase(
+    by_folder: dict[str, list[tuple[Path, int]]],
+    *,
+    limit_per_folder: int,
+    cap_bytes: int,
+) -> list[tuple[str, Path, int]]:
+    """Phase 1: up to ``limit_per_folder`` per folder. Phase 2: more until ``cap_bytes``.
+
+    Walk order within each folder. Files that don't fit the remaining cap are skipped;
+    selection keeps looking for ones that do. Returns ``(folder_name, path, size)``.
+    """
+    selected: list[tuple[str, Path, int]] = []
+    used = 0
+    names = list(by_folder.keys())
+    cursors = {name: 0 for name in names}
+    phase1_counts = {name: 0 for name in names}
+
+    def _take_one(name: str) -> bool:
+        """Advance cursor; if a file fits, append it and return True. Exhaust → False."""
+        nonlocal used
+        files = by_folder[name]
+        while cursors[name] < len(files):
+            path, size = files[cursors[name]]
+            cursors[name] += 1
+            if used + size <= cap_bytes:
+                selected.append((name, path, size))
+                used += size
+                return True
+            # skip — doesn't fit; try next in this folder
+        return False
+
+    # Phase 1 — up to limit_per_folder each
+    for name in names:
+        while phase1_counts[name] < limit_per_folder:
+            if used >= cap_bytes:
                 return selected
+            if not _take_one(name):
+                break
+            phase1_counts[name] += 1
+
+    # Phase 2 — keep filling until cap (round-robin across folders)
+    while used < cap_bytes:
+        progressed = False
+        for name in names:
+            if used >= cap_bytes:
+                break
+            if cursors[name] >= len(by_folder[name]):
+                continue
+            if _take_one(name):
+                progressed = True
+        if not progressed:
+            break
+
     return selected
 
 
 def first_n_files(folder: Path, limit: int) -> list[Path]:
-    """Back-compat helper used by older tests — no byte cap."""
-    return [p for p, _ in select_files(folder, limit=limit, cap_bytes=10**18)]
+    """Back-compat helper for older tests."""
+    return [p for p, _ in list_files(folder)[:limit]]
+
+
+def select_files(folder: Path, *, limit: int, cap_bytes: int) -> list[tuple[Path, int]]:
+    """Back-compat: single-folder two-phase collapses to one phase when limit covers all."""
+    picked = select_files_two_phase({"_": list_files(folder)}, limit_per_folder=limit, cap_bytes=cap_bytes)
+    return [(path, size) for _name, path, size in picked]
 
 
 def dest_folder_name(folder_name: str) -> str:
@@ -127,21 +180,16 @@ def dest_folder_name(folder_name: str) -> str:
     return folder_name
 
 
-def copy_files(
-    files: list[tuple[Path, int]], source_folder: Path, dest_folder: Path,
-) -> tuple[int, int]:
-    ok = fail = 0
-    for src, _size in files:
-        rel = src.relative_to(source_folder)
-        dst = dest_folder / rel
-        try:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            ok += 1
-        except OSError as exc:
-            fail += 1
-            _log(f"FAIL {src}: {exc}")
-    return ok, fail
+def copy_one(src: Path, source_folder: Path, dest_folder: Path) -> bool:
+    rel = src.relative_to(source_folder)
+    dst = dest_folder / rel
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        return True
+    except OSError as exc:
+        _log(f"FAIL {src}: {exc}")
+        return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -149,9 +197,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--root", required=True, metavar="DIR",
                     help="Parent folder — every immediate subfolder is processed")
     p.add_argument("--limit", type=int, default=1000,
-                    help="Max files to copy per subfolder (default: 1000)")
+                    help="Files to take per subfolder first, before topping up to the GB cap "
+                         "(default: 1000)")
     p.add_argument("--cap-gb", type=float, default=15.0,
-                    help="Overall byte cap in GB, split equally across subfolders (default: 15)")
+                    help="Overall byte cap in GB (default: 15). After the per-folder limit, "
+                         "more files are taken until this is reached.")
     p.add_argument("--folder-name", default="AI Labs Sample Set",
                     help="Destination folder name on the Desktop")
     p.add_argument("--dest", default="",
@@ -194,46 +244,54 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     cap_bytes = int(args.cap_gb * GB)
-    share = max(1, cap_bytes // len(subfolders))
-    dest_root.mkdir(parents=True, exist_ok=True)
-    _log(f"{len(subfolders)} subfolder(s) → up to {args.limit} file(s) each, "
-         f"{args.cap_gb:g}GB total (~{share / GB:.2f}GB each) → {dest_root}")
+    _log(f"{len(subfolders)} subfolder(s) → first {args.limit}/folder, then fill to "
+         f"{args.cap_gb:g}GB → {dest_root}")
 
+    folder_by_name = {f.name: f for f in subfolders}
+    by_folder: dict[str, list[tuple[Path, int]]] = {}
+    for folder in subfolders:
+        files = list_files(folder)
+        by_folder[folder.name] = files
+        _log(f"  listed {folder.name}: {len(files)} file(s), "
+             f"{sum(s for _, s in files) / GB:.2f}GB")
+
+    selected = select_files_two_phase(
+        by_folder, limit_per_folder=args.limit, cap_bytes=cap_bytes,
+    )
+    total_bytes = sum(sz for _, _, sz in selected)
+    _log(f"selected {len(selected)} file(s), {total_bytes / GB:.2f}GB / {args.cap_gb:g}GB")
+
+    dest_root.mkdir(parents=True, exist_ok=True)
     manifest_files: list[dict] = []
     total_ok = total_fail = 0
-    total_bytes = 0
-    for i, folder in enumerate(subfolders, 1):
-        files = select_files(folder, limit=args.limit, cap_bytes=share)
-        folder_bytes = sum(sz for _, sz in files)
-        dest_sub = dest_root / folder.name
-        ok, fail = copy_files(files, folder, dest_sub)
-        total_ok += ok
-        total_fail += fail
-        total_bytes += folder_bytes
-        note = ""
-        if len(files) < args.limit:
-            note = f" (under limit; folder/cap allowed {len(files)})"
-        _log(f"({i}/{len(subfolders)}) {folder.name}: copied {ok} file(s), "
-             f"{folder_bytes / GB:.2f}GB{note}"
-             + (f" fail={fail}" if fail else ""))
-        for src, size in files:
-            rel = src.relative_to(folder).as_posix()
-            manifest_files.append({
-                "name": src.name,
-                "path": f"{folder.name}/{rel}",
-                "folder": folder.name,
-                "size_bytes": size,
-            })
+    per_folder_counts: dict[str, int] = {}
+    for name, src, size in selected:
+        source_folder = folder_by_name[name]
+        dest_sub = dest_root / name
+        if copy_one(src, source_folder, dest_sub):
+            total_ok += 1
+            per_folder_counts[name] = per_folder_counts.get(name, 0) + 1
+        else:
+            total_fail += 1
+        rel = src.relative_to(source_folder).as_posix()
+        manifest_files.append({
+            "name": src.name,
+            "path": f"{name}/{rel}",
+            "folder": name,
+            "size_bytes": size,
+        })
+
+    for name in by_folder:
+        _log(f"  {name}: copied {per_folder_counts.get(name, 0)}")
 
     out_path = (_ROOT / args.out).resolve() if not Path(args.out).is_absolute() else Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps({
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "scan_mode": "local_first_n",
+        "scan_mode": "local_first_n_then_cap",
         "root": str(root),
         "limit_per_folder": args.limit,
         "cap_bytes": cap_bytes,
-        "cap_share_per_folder": share,
         "total_bytes": total_bytes,
         "dest": str(dest_root),
         "files": manifest_files,

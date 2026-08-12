@@ -17,12 +17,10 @@ company-dump/
   anything-else/
 ```
 
-From each subfolder it takes files in order (whatever comes first), up to:
+From each subfolder:
 
-- **1000 files** per subfolder (or fewer if the folder has less)
-- **15GB overall**, split equally across the subfolders
-
-If a subfolder is smaller than its share / has fewer than 1000 files, **all that fits** is copied.
+1. Take up to **1000 files** first (or fewer if the folder has less)
+2. If the total is still under **15GB**, keep taking **more files** from those folders until 15GB is reached
 
 Copies land on your **Desktop**, keeping the same subfolder names:
 
@@ -156,13 +154,13 @@ out/quality_sample_local_manifest.json
 
 ## Optional flags
 
-**Different file limit (default 1000 per subfolder):**
+**Different per-folder first pass (default 1000, then fill to 15GB):**
 
 ```
-python tools/build_quality_sample_local.py --root ~/Downloads/company-dump --limit 500
+python tools/build_quality_sample_local.py --root ~/Downloads/company-dump --limit 1000
 ```
 
-**Different byte cap (default 15GB overall):**
+**Different overall byte cap (default 15GB):**
 
 ```
 python tools/build_quality_sample_local.py --root ~/Downloads/company-dump --cap-gb 15
