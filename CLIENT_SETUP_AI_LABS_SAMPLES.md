@@ -98,7 +98,7 @@ Point at any parent folder. **Every immediate subfolder** is processed — names
   ...
 ```
 
-Skips Parts 3–8. Per subfolder: first **1000 files**, then more until **15GB** overall is reached. Copies onto the **Desktop**.
+Skips Parts 3–8. Rounds of **1000 files per subfolder** until **15GB** overall is reached. Copies onto the **Desktop**.
 
 Full local-only guide: `CLIENT_SETUP_AI_LABS_SAMPLES_LOCAL.docx`
 
@@ -127,7 +127,7 @@ Desktop/AI Labs Sample Set (YYYY-MM-DD)/
 **Useful variants**
 
 ```
-# First-pass file count per folder (default 1000), then fill to 15GB
+# Files per folder per round (default 1000; rounds repeat until 15GB)
 python tools/build_quality_sample_local.py --root ~/Downloads/company-dump --limit 1000
 
 # Overall byte cap (default 15GB)

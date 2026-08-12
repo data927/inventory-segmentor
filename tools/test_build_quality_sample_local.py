@@ -46,8 +46,8 @@ def test_first_n_stops_early() -> None:
         assert [p.name for p in got] == ["f0.txt", "f1.txt", "f2.txt"]
 
 
-def test_phase1_then_topup_to_cap() -> None:
-    """After 2/folder, keep taking until cap fills."""
+def test_rounds_of_limit_until_cap() -> None:
+    """Round 1: 2/folder; round 2: another 2/folder; stop when cap fills mid-round."""
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         # each folder: 5 x 100-byte files
@@ -55,15 +55,16 @@ def test_phase1_then_topup_to_cap() -> None:
             for i in range(5):
                 _write(root / name / f"{i}.bin", 100)
         by = {name: list_files(root / name) for name in ("a", "b")}
-        # phase1: 2 each = 400 bytes; cap 700 → phase2 should add 3 more (300) = 700
+        # round1: a gets 2, b gets 2 → 400; round2: a gets 2, b gets 1 more to hit 700
         picked = select_files_two_phase(by, limit_per_folder=2, cap_bytes=700)
         assert sum(sz for _, _, sz in picked) == 700
         assert len(picked) == 7
-        # each folder got at least the phase-1 two
         counts = {}
         for name, _, _ in picked:
             counts[name] = counts.get(name, 0) + 1
         assert counts["a"] >= 2 and counts["b"] >= 2
+        # both folders participated in more than one round's worth when possible
+        assert counts["a"] + counts["b"] == 7
 
 
 def test_under_limits_copies_whatever_exists() -> None:
@@ -100,7 +101,7 @@ def test_cap_skips_oversized() -> None:
 if __name__ == "__main__":
     test_any_subfolder_names()
     test_first_n_stops_early()
-    test_phase1_then_topup_to_cap()
+    test_rounds_of_limit_until_cap()
     test_under_limits_copies_whatever_exists()
     test_cap_skips_oversized()
     print("ok")

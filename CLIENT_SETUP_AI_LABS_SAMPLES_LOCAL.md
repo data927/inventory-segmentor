@@ -17,10 +17,13 @@ company-dump/
   anything-else/
 ```
 
-From each subfolder:
+In **rounds** until **15GB** (or every folder is empty):
 
-1. Take up to **1000 files** first (or fewer if the folder has less)
-2. If the total is still under **15GB**, keep taking **more files** from those folders until 15GB is reached
+1. Round 1 — up to **1000 files** from each subfolder
+2. Round 2 — another up to **1000** from each subfolder
+3. …and so on, until 15GB is hit
+
+If a folder has fewer than 1000 left in a round, it just contributes what’s left.
 
 Copies land on your **Desktop**, keeping the same subfolder names:
 
@@ -154,7 +157,7 @@ out/quality_sample_local_manifest.json
 
 ## Optional flags
 
-**Different per-folder first pass (default 1000, then fill to 15GB):**
+**Files per folder per round (default 1000; rounds repeat until 15GB):**
 
 ```
 python tools/build_quality_sample_local.py --root ~/Downloads/company-dump --limit 1000

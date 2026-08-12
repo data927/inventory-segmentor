@@ -5,10 +5,11 @@ Point ``--root`` at any parent folder. Every immediate subfolder is processed
 
 Selection (overall ``--cap-gb``, default 15GB):
 
-  1. Per subfolder — take up to ``--limit`` files (default 1000; or whatever
-     the folder has if less), walk order, whatever comes first.
-  2. If the total is still under 15GB — keep taking more files from those
-     folders until the cap is reached.
+  Repeated rounds until 15GB (or every folder is exhausted):
+
+  - Each round, every subfolder contributes up to ``--limit`` more files
+    (default 1000; or whatever is left if less), walk order.
+  - Stop when the overall cap is hit.
 
 Copies to::
 
@@ -113,16 +114,20 @@ def select_files_two_phase(
     limit_per_folder: int,
     cap_bytes: int,
 ) -> list[tuple[str, Path, int]]:
-    """Phase 1: up to ``limit_per_folder`` per folder. Phase 2: more until ``cap_bytes``.
+    """Rounds of up to ``limit_per_folder`` per folder until ``cap_bytes`` is hit.
 
-    Walk order within each folder. Files that don't fit the remaining cap are skipped;
-    selection keeps looking for ones that do. Returns ``(folder_name, path, size)``.
+    Round 1: up to 1000 (default) from each folder.
+    Round 2: another up to 1000 from each folder, if still under the GB cap.
+    And so on, until the cap is full or every folder is exhausted.
+
+    Walk order within each folder. Files that don't fit the remaining cap are
+    skipped; selection keeps looking for ones that do.
+    Returns ``(folder_name, path, size)``.
     """
     selected: list[tuple[str, Path, int]] = []
     used = 0
     names = list(by_folder.keys())
     cursors = {name: 0 for name in names}
-    phase1_counts = {name: 0 for name in names}
 
     def _take_one(name: str) -> bool:
         """Advance cursor; if a file fits, append it and return True. Exhaust → False."""
@@ -138,26 +143,20 @@ def select_files_two_phase(
             # skip — doesn't fit; try next in this folder
         return False
 
-    # Phase 1 — up to limit_per_folder each
-    for name in names:
-        while phase1_counts[name] < limit_per_folder:
-            if used >= cap_bytes:
-                return selected
-            if not _take_one(name):
-                break
-            phase1_counts[name] += 1
-
-    # Phase 2 — keep filling until cap (round-robin across folders)
     while used < cap_bytes:
-        progressed = False
+        round_progressed = False
         for name in names:
             if used >= cap_bytes:
                 break
-            if cursors[name] >= len(by_folder[name]):
-                continue
-            if _take_one(name):
-                progressed = True
-        if not progressed:
+            taken_this_round = 0
+            while taken_this_round < limit_per_folder:
+                if used >= cap_bytes:
+                    break
+                if not _take_one(name):
+                    break
+                taken_this_round += 1
+                round_progressed = True
+        if not round_progressed:
             break
 
     return selected
@@ -197,11 +196,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--root", required=True, metavar="DIR",
                     help="Parent folder — every immediate subfolder is processed")
     p.add_argument("--limit", type=int, default=1000,
-                    help="Files to take per subfolder first, before topping up to the GB cap "
-                         "(default: 1000)")
+                    help="Files per subfolder per round (default: 1000). Rounds repeat "
+                         "until --cap-gb is reached.")
     p.add_argument("--cap-gb", type=float, default=15.0,
-                    help="Overall byte cap in GB (default: 15). After the per-folder limit, "
-                         "more files are taken until this is reached.")
+                    help="Overall byte cap in GB (default: 15). Keep doing --limit-per-folder "
+                         "rounds across folders until this is reached.")
     p.add_argument("--folder-name", default="AI Labs Sample Set",
                     help="Destination folder name on the Desktop")
     p.add_argument("--dest", default="",
@@ -244,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     cap_bytes = int(args.cap_gb * GB)
-    _log(f"{len(subfolders)} subfolder(s) → first {args.limit}/folder, then fill to "
+    _log(f"{len(subfolders)} subfolder(s) → {args.limit}/folder each round until "
          f"{args.cap_gb:g}GB → {dest_root}")
 
     folder_by_name = {f.name: f for f in subfolders}
